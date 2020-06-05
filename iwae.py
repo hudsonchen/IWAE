@@ -2,12 +2,14 @@
 import torch
 import numpy as np
 from torch.autograd import Variable
+import torch.nn as nn
 
-def weight_variable(shape):
-	return Variable(torch.randn(shape))
+eps = 1e-4
+def weight_parameter(shape):
+	return nn.Parameter(torch.randn(shape))
 
-def bias_variable(shape):
-	return Variable(torch.ones(shape) * 0.1)
+def bias_parameter(shape):
+	return nn.Parameter(torch.zeros(shape))
 
 def linear_then_tanh(input_x, W, b):
 	return torch.tanh(torch.matmul(input_x, W) + b)
@@ -19,7 +21,7 @@ def linear_then_exp(input_x, W, b):
 	return torch.exp(torch.matmul(input_x, W) + b)
 
 def linear_then_sigmoid(input_x, W, b):
-	return torch.softmax((torch.matmul(input_x, W) + b), dim = 1)
+	return torch.sigmoid((torch.matmul(input_x, W) + b))
 
 def repeat(x, num, dim_):
     temp = x
@@ -33,63 +35,68 @@ def sample_from_gaussian(mean, var, batch_size):
 	return torch.mul(perturb, var) + mean
 
 
-class importance_vae():
-	def __init__(self, batch_size, stoc_dim, det_dim, K):
-		self.stoc_dim = stoc_dim
-		self.det_dim = det_dim
-		self.K = K
-		self.batch_size = batch_size
-		self.p_param = []
-		self.q_param = []
-		self.K_samples = torch.tensor([])
+class importance_vae(nn.Module):
+	def __init__(self, feature_size, batch_size, stoc_dim, det_dim, K):
+		super(importance_vae, self).__init__()
+		self.Q_1_weight = weight_parameter([feature_size, det_dim])
+		self.Q_1_bias = bias_parameter([batch_size, det_dim])
 
-	def construct_model(self, x):
-		x_dim = x.shape[1]
-		Q_1_variable = {'weight': weight_variable([x_dim, self.det_dim]), 'bias': bias_variable([self.batch_size, self.det_dim])}
-		Q_2_variable = {'weight':weight_variable([self.det_dim, self.det_dim]), 'bias': bias_variable([self.batch_size, self.det_dim])}
-		Q_3_variable = {'weight':weight_variable([self.det_dim, self.stoc_dim]),'bias': bias_variable([self.batch_size, self.stoc_dim])}
-		self.q_param = [Q_1_variable, Q_2_variable, Q_3_variable]
-		P_1_variable = {'weight':weight_variable([self.stoc_dim, self.det_dim]), 'bias': bias_variable([self.batch_size * self.K, self.det_dim])}
-		P_2_variable = {'weight': weight_variable([self.det_dim, self.det_dim]), 'bias': bias_variable([self.batch_size * self.K, self.det_dim])}
-		P_3_variable = {'weight': weight_variable([self.det_dim, 10]), 'bias': bias_variable([self.batch_size * self.K, 10])}
-		self.p_param = [P_1_variable, P_2_variable, P_3_variable]
-		params = 
-		return self.q_param, self.p_param
+		self.Q_2_weight = weight_parameter([det_dim, det_dim])
+		self.Q_2_bias = bias_parameter([batch_size, det_dim])
+
+		self.Q_3_weight = weight_parameter([det_dim, stoc_dim])
+		self.Q_3_bias = bias_parameter([batch_size, stoc_dim])
+		
+		self.Q_4_weight = weight_parameter([det_dim, stoc_dim])
+		self.Q_4_bias = bias_parameter([batch_size, stoc_dim])
+
+		self.P_1_weight = weight_parameter([stoc_dim, det_dim])
+		self.P_1_bias = bias_parameter([batch_size * K, det_dim])
+
+		self.P_2_weight = weight_parameter([det_dim, det_dim])
+		self.P_2_bias = bias_parameter([batch_size * K, det_dim])
+
+		self.P_3_weight = weight_parameter([det_dim, feature_size])
+		self.P_3_bias = bias_parameter([batch_size * K, feature_size])
+
 
 	def encode(self, x):
-		q_out_one = linear_then_tanh(x, self.q_param[0]['weight'], self.q_param[0]['bias'])
-		q_out_two = linear_then_tanh(q_out_one, self.q_param[1]['weight'], self.q_param[1]['bias'])
-		stoc_mean = linear(q_out_two, self.q_param[2]['weight'], self.q_param[2]['bias'])
-		stoc_logvar = linear(q_out_two, self.q_param[2]['weight'], self.q_param[2]['bias'])
+		q_out_one = linear_then_tanh(x, self.Q_1_weight, self.Q_1_bias)
+		q_out_two = linear_then_tanh(q_out_one, self.Q_2_weight, self.Q_2_bias)
+		stoc_mean = linear(q_out_two, self.Q_3_weight, self.Q_3_bias)
+		stoc_logvar = linear(q_out_two, self.Q_4_weight, self.Q_4_bias) / 10
 		return stoc_mean, stoc_logvar
 
-	def get_K_samples(self, stoc_mean, stoc_logvar):
+	def get_K_samples(self, stoc_mean, stoc_logvar, batch_size, K):
+		K_samples = torch.tensor([])
 		stoc_var = torch.exp(stoc_logvar)
-		for i in range(self.K):
-			new_sample = sample_from_gaussian(stoc_mean, stoc_var, self.batch_size)
-			self.K_samples = torch.cat((self.K_samples, new_sample), dim = 0)
-		return self.K_samples
+		for i in range(K):
+			new_sample = sample_from_gaussian(stoc_mean, stoc_var, batch_size)
+			K_samples = torch.cat((K_samples, new_sample), dim = 0)
+		return K_samples
 		
-	def decode(self):
-		p_out_one = linear_then_tanh(self.K_samples, self.p_param[0]['weight'], self.p_param[0]['bias'])
-		p_out_two = linear_then_tanh(p_out_one, self.p_param[1]['weight'], self.p_param[1]['bias'])
-		y_hat = linear_then_sigmoid(p_out_two, self.p_param[2]['weight'], self.p_param[2]['bias'])
-		return y_hat
+	def decode(self, K_samples):
+		p_out_one = linear_then_tanh(K_samples, self.P_1_weight, self.P_1_bias)
+		p_out_two = linear_then_tanh(p_out_one,  self.P_2_weight, self.P_2_bias)
+		X_hat = linear_then_sigmoid(p_out_two,  self.P_3_weight, self.P_3_bias)
+		return X_hat
 
 
-def IWAE_loss(K_samples, y_hat, batch_size, K, stoc_mean, stoc_logvar, y, stoc_dim):
+def IWAE_loss(x, X_hat, K_samples, batch_size, K, stoc_mean, stoc_logvar,  feature_size, stoc_dim):
 	K_samples_tp = K_samples.reshape([K, batch_size, stoc_dim])
-	y_hat_tp = y_hat.reshape([K, batch_size, 10])
+	X_hat_tp = X_hat.reshape([K, batch_size, feature_size])
 	loss_per_batch = torch.ones(batch_size)
 	for i in range(batch_size):
 		h_i = K_samples_tp[:,i,:]
 		mean_i = repeat(stoc_mean[i,:].reshape([1,-1]), K, dim_ = 0)
 		var_i = torch.exp(repeat(stoc_logvar[i,:].reshape([1,-1]), K, dim_ = 0))
-		q_h_given_x_i = torch.sum(1. / var_i * torch.exp(- 0.5 * torch.pow((h_i - mean_i) / var_i, 2)), dim = 1)
-		y_hat_i = y_hat_tp[:,i,:]
-		y_i = repeat(y[i,:].reshape([1,-1]), K, dim_ = 0)
-		p_x_given_h_i = torch.exp(torch.sum(y_i * torch.log(y_hat_i) + (1. - y_i) * torch.log(1. - y_hat_i), dim = 1))
-		loss_per_batch[i] = torch.log(torch.mean(p_x_given_h_i / q_h_given_x_i))
+		log_q_h_given_xi = torch.sum(- torch.log(var_i) - 0.5 * torch.pow((h_i - mean_i) / var_i, 2), dim = 1)
+		X_hat_i = X_hat_tp[:,i,:]
+		x_i = repeat(x[i,:].reshape([1,-1]), K, dim_ = 0)
+		log_p_x_given_hi = torch.mean(x_i * torch.log(X_hat_i + eps) + (1. - x_i) * torch.log(1. - X_hat_i + eps), dim = 1)
+		log_p_hi = torch.mean(-0.5 * (h_i **2), dim = 1)
+		log_tp = log_p_x_given_hi + log_p_hi - log_q_h_given_xi
+		loss_per_batch[i] = torch.log(torch.mean(torch.exp(log_tp)))
 	return torch.mean(loss_per_batch)
 
 
