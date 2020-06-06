@@ -6,7 +6,8 @@ import torch.nn as nn
 
 eps = 1e-4
 def weight_parameter(shape):
-	return nn.Parameter(torch.randn(shape))
+	std = torch.ones(shape) * 0.1
+	return nn.Parameter(torch.normal(0.0, std))
 
 def bias_parameter(shape):
 	return nn.Parameter(torch.zeros(shape))
