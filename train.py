@@ -8,6 +8,7 @@ Created on Fri Jun  5 12:44:10 2020
 import numpy as np
 import iwae
 import torch
+
 from torch.autograd import Variable
 import matplotlib.pyplot as plt
 
@@ -18,7 +19,7 @@ def repeat(x, num, dim_):
     return temp
 
 batch_size = 20
-batch_num = 1000
+batch_num = 1200
 stoc_dim = 50
 det_dim = 100
 K = 2
@@ -35,15 +36,19 @@ model = iwae.importance_vae(feature_size, batch_size, stoc_dim, det_dim, K)
 
 
 '''------------------------training------------------------'''
-optimizer = torch.optim.Adam(model.parameters(), lr = 0.0001)
+optimizer = torch.optim.Adam(model.parameters(), lr = 1e-4)
 
 plt.imshow(XX.reshape([28,28]),cmap = 'gray')
 plt.show()
-	
+
+log_p_hi_graph = np.zeros([epoch_num * batch_num * batch_size,1])
+log_q_h_given_xi_graph = np.zeros([epoch_num * batch_num * batch_size,1])
+log_p_x_given_hi_graph = np.zeros([epoch_num * batch_num * batch_size,1])
+
 eps = 1e-4
 for j in range(epoch_num):
 	for batch_idx in range(batch_num):
-		train_batch_tensor = Variable(torch.tensor(train_image[batch_idx,:,:]))
+		train_batch_tensor = Variable(torch.DoubleTensor(train_image[batch_idx,:,:]))
 		stoc_mean, stoc_logvar = model.encode(train_batch_tensor)
 		#print(torch.mean(stoc_mean))
 		K_samples = model.get_K_samples(stoc_mean, stoc_logvar, batch_size, K)
@@ -52,7 +57,7 @@ for j in range(epoch_num):
 		x = train_batch_tensor
 		K_samples_tp = K_samples.reshape([K, batch_size, stoc_dim])
 		X_hat_tp = X_hat.reshape([K, batch_size, feature_size])
-		loss_per_batch = torch.ones(batch_size)
+		loss_per_batch = torch.ones(batch_size, requires_grad = True).double()
 		for i in range(batch_size):
 			h_i = K_samples_tp[:,i,:]
 			mean_i = repeat(stoc_mean[i,:].reshape([1,-1]), K, dim_ = 0)
@@ -61,16 +66,26 @@ for j in range(epoch_num):
 			X_hat_i = X_hat_tp[:,i,:]
 			x_i = repeat(x[i,:].reshape([1,-1]), K, dim_ = 0)
 			log_p_x_given_hi = torch.sum(x_i * torch.log(X_hat_i + eps) + (1. - x_i) * torch.log(1. - X_hat_i + eps), dim = 1)
+			if(torch.mean(log_p_x_given_hi) < -700):
+				continue
 			log_p_hi = torch.sum(-0.5 * (h_i **2), dim = 1)
 			log_tp = log_p_x_given_hi + log_p_hi - log_q_h_given_xi
-			loss_per_batch[i] = torch.mean(log_tp)
-			
+			loss_per_batch[i] = torch.log(torch.mean(torch.exp(log_tp)))
+			log_p_hi_graph[j * batch_num * batch_size + batch_idx * batch_size + i] = np.mean(log_p_hi.detach().numpy())
+			log_p_x_given_hi_graph[j * batch_num * batch_size + batch_idx * batch_size + i] = np.mean(log_p_x_given_hi.detach().numpy())
+			log_q_h_given_xi_graph[j * batch_num * batch_size + batch_idx * batch_size + i] = np.mean(log_q_h_given_xi.detach().numpy())
 		ELBO = -torch.mean(loss_per_batch)
 		optimizer.zero_grad()
 		ELBO.backward()
 		optimizer.step()
+
 	print(ELBO)
 	plt.imshow(X_hat_i.detach().numpy()[1,:].reshape([28,28]),cmap = 'gray')
 	plt.show()
 
-
+plt.plot(log_p_hi_graph)
+plt.show()
+plt.plot(log_q_h_given_xi_graph)
+plt.show()
+plt.plot(log_p_x_given_hi_graph)
+plt.show()
