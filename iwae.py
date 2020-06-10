@@ -7,10 +7,10 @@ import torch.nn as nn
 eps = 1e-4
 def weight_parameter(shape):
 	std = torch.ones(shape) * 0.1
-	return nn.Parameter(torch.normal(0.0, std))
+	return nn.Parameter(torch.normal(0.0, std).double())
 
 def bias_parameter(shape):
-	return nn.Parameter(torch.zeros(shape))
+	return nn.Parameter(torch.zeros(shape).double())
 
 def linear_then_tanh(input_x, W, b):
 	return torch.tanh(torch.matmul(input_x, W) + b)
@@ -32,7 +32,7 @@ def repeat(x, num, dim_):
 
 def sample_from_gaussian(mean, var, batch_size):
 	dimension = mean.shape[1]
-	perturb = repeat(torch.randn([1, dimension]), batch_size, 0)
+	perturb = repeat(torch.randn([1, dimension], dtype = torch.double), batch_size, 0)
 	return torch.mul(perturb, var) + mean
 
 
@@ -65,11 +65,11 @@ class importance_vae(nn.Module):
 		q_out_one = linear_then_tanh(x, self.Q_1_weight, self.Q_1_bias)
 		q_out_two = linear_then_tanh(q_out_one, self.Q_2_weight, self.Q_2_bias)
 		stoc_mean = linear(q_out_two, self.Q_3_weight, self.Q_3_bias)
-		stoc_logvar = linear(q_out_two, self.Q_4_weight, self.Q_4_bias) / 10
+		stoc_logvar = linear(q_out_two, self.Q_4_weight, self.Q_4_bias)
 		return stoc_mean, stoc_logvar
 
 	def get_K_samples(self, stoc_mean, stoc_logvar, batch_size, K):
-		K_samples = torch.tensor([])
+		K_samples = torch.DoubleTensor([])
 		stoc_var = torch.exp(stoc_logvar)
 		for i in range(K):
 			new_sample = sample_from_gaussian(stoc_mean, stoc_var, batch_size)
