@@ -8,84 +8,65 @@ Created on Fri Jun  5 12:44:10 2020
 import numpy as np
 import iwae
 import torch
-
 from torch.autograd import Variable
-import matplotlib.pyplot as plt
+from torchvision.utils import save_image
 
-def repeat(x, num, dim_):
-    temp = x
-    for i in range(num - 1):
-        temp = torch.cat((temp,x), dim = dim_)
-    return temp
-
+'''------------------------Hyper-parameter------------------------'''
 batch_size = 20
-batch_num = 1200
+batch_num = 1000
 stoc_dim = 50
 det_dim = 100
-K = 2
+K = 5
 feature_size = 28 * 28
-epoch_num = 50
-print_count = 0
+epoch_num = 40
 
+'''------------------------Loading training data------------------------'''
 train_image = np.load("train_data.npy")[:batch_size * batch_num,:].reshape([-1, batch_size, feature_size])
-train_label = np.load("train_label.npy")
-XX = train_image[batch_num - 1, batch_size - 1,:]
 
 '''------------------------Construct model------------------------'''
-model = iwae.importance_vae(feature_size, batch_size, stoc_dim, det_dim, K)
+model = iwae.importance_vae(feature_size, stoc_dim, det_dim)
 
 
-'''------------------------training------------------------'''
-optimizer = torch.optim.Adam(model.parameters(), lr = 1e-4)
+'''------------------------Optimizer------------------------'''
+optimizer = torch.optim.Adam(model.parameters(), lr = 1e-3)
+scheduler = torch.optim.lr_scheduler.StepLR(optimizer,step_size = 4,gamma = 0.9)
 
-plt.imshow(XX.reshape([28,28]),cmap = 'gray')
-plt.show()
-
-log_p_hi_graph = np.zeros([epoch_num * batch_num * batch_size,1])
-log_q_h_given_xi_graph = np.zeros([epoch_num * batch_num * batch_size,1])
-log_p_x_given_hi_graph = np.zeros([epoch_num * batch_num * batch_size,1])
-
-eps = 1e-4
-for j in range(epoch_num):
+'''------------------------Training------------------------'''
+for epoch in range(epoch_num):
+	scheduler.step()
 	for batch_idx in range(batch_num):
-		train_batch_tensor = Variable(torch.DoubleTensor(train_image[batch_idx,:,:]))
+		train_batch_tensor = Variable(torch.Tensor(train_image[batch_idx,:,:]))
 		stoc_mean, stoc_logvar = model.encode(train_batch_tensor)
-		#print(torch.mean(stoc_mean))
-		K_samples = model.get_K_samples(stoc_mean, stoc_logvar, batch_size, K)
+		K_samples = model.get_K_samples(stoc_mean, stoc_logvar, K)
 		X_hat = model.decode(K_samples)
-	
-		x = train_batch_tensor
-		K_samples_tp = K_samples.reshape([K, batch_size, stoc_dim])
-		X_hat_tp = X_hat.reshape([K, batch_size, feature_size])
-		loss_per_batch = torch.ones(batch_size, requires_grad = True).double()
-		for i in range(batch_size):
-			h_i = K_samples_tp[:,i,:]
-			mean_i = repeat(stoc_mean[i,:].reshape([1,-1]), K, dim_ = 0)
-			var_i = torch.exp(repeat(stoc_logvar[i,:].reshape([1,-1]), K, dim_ = 0))
-			log_q_h_given_xi = torch.sum(- torch.log(var_i) - 0.5 * torch.pow((h_i - mean_i) / var_i, 2), dim = 1)
-			X_hat_i = X_hat_tp[:,i,:]
-			x_i = repeat(x[i,:].reshape([1,-1]), K, dim_ = 0)
-			log_p_x_given_hi = torch.sum(x_i * torch.log(X_hat_i + eps) + (1. - x_i) * torch.log(1. - X_hat_i + eps), dim = 1)
-			if(torch.mean(log_p_x_given_hi) < -700):
-				continue
-			log_p_hi = torch.sum(-0.5 * (h_i **2), dim = 1)
-			log_tp = log_p_x_given_hi + log_p_hi - log_q_h_given_xi
-			loss_per_batch[i] = torch.log(torch.mean(torch.exp(log_tp)))
-			log_p_hi_graph[j * batch_num * batch_size + batch_idx * batch_size + i] = np.mean(log_p_hi.detach().numpy())
-			log_p_x_given_hi_graph[j * batch_num * batch_size + batch_idx * batch_size + i] = np.mean(log_p_x_given_hi.detach().numpy())
-			log_q_h_given_xi_graph[j * batch_num * batch_size + batch_idx * batch_size + i] = np.mean(log_q_h_given_xi.detach().numpy())
-		ELBO = -torch.mean(loss_per_batch)
+		
+		ELBO = model.IWAE_loss(train_batch_tensor, X_hat, K_samples, batch_size, K, stoc_mean, stoc_logvar,  feature_size, stoc_dim)
 		optimizer.zero_grad()
 		ELBO.backward()
 		optimizer.step()
+	print('Train epoch: {} ELBO: {}'.format((epoch + 1),-ELBO.detach()))
 
-	print(ELBO)
-	plt.imshow(X_hat_i.detach().numpy()[1,:].reshape([28,28]),cmap = 'gray')
-	plt.show()
+model.eval()
+test_image = np.load("test_data.npy")[:10,:]
 
-plt.plot(log_p_hi_graph)
-plt.show()
-plt.plot(log_q_h_given_xi_graph)
-plt.show()
-plt.plot(log_p_x_given_hi_graph)
-plt.show()
+'''------------------------Testing------------------------'''
+for i in range(10):
+	test_tensor = torch.Tensor(test_image[i,:])
+	test_hat = model.forward(test_tensor, 1).reshape([28,28])
+	if (i == 0):
+		idiot = torch.cat((test_tensor.reshape([28,28]),test_hat), dim = 0)
+		output = idiot
+	else:
+		idiot = torch.cat((test_tensor.reshape([28,28]),test_hat), dim = 0)
+		output = torch.cat((output, idiot), dim = 1)
+save_image(output, 'test_result.png')
+
+'''------------------------Faking------------------------'''
+for i in range(10):
+	Alzheimer = model.generate_random_latent(stoc_dim).reshape([28,28])
+	if (i == 0):
+		fake_image = Alzheimer
+	else:
+		fake_image = torch.cat((fake_image, Alzheimer), dim = 1)	
+save_image(fake_image, 'fake_result.png')
+
