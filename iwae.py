@@ -3,102 +3,88 @@ import torch
 import numpy as np
 from torch.autograd import Variable
 import torch.nn as nn
+import torch.nn.functional as F
 
 eps = 1e-4
-def weight_parameter(shape):
-	std = torch.ones(shape) * 0.1
-	return nn.Parameter(torch.normal(0.0, std).double())
 
-def bias_parameter(shape):
-	return nn.Parameter(torch.zeros(shape).double())
-
-def linear_then_tanh(input_x, W, b):
-	return torch.tanh(torch.matmul(input_x, W) + b)
-
-def linear(input_x, W, b):
-	return torch.matmul(input_x, W) + b
-
-def linear_then_exp(input_x, W, b):
-	return torch.exp(torch.matmul(input_x, W) + b)
-
-def linear_then_sigmoid(input_x, W, b):
-	return torch.sigmoid((torch.matmul(input_x, W) + b))
-
-def repeat(x, num, dim_):
+def repeat(x, num):
     temp = x
     for i in range(num - 1):
-        temp = torch.cat((temp,x), dim = dim_)
-    return temp
+        temp = torch.cat((temp,x), dim = 0)
+    return temp.reshape([-1, x.shape[0],x.shape[1]])
 
-def sample_from_gaussian(mean, var, batch_size):
-	dimension = mean.shape[1]
-	perturb = repeat(torch.randn([1, dimension], dtype = torch.double), batch_size, 0)
+def sample_from_gaussian(mean, var):
+	perturb = torch.randn_like(mean)
 	return torch.mul(perturb, var) + mean
 
 
+
 class importance_vae(nn.Module):
-	def __init__(self, feature_size, batch_size, stoc_dim, det_dim, K):
+	def __init__(self, feature_size, stoc_dim, det_dim):
 		super(importance_vae, self).__init__()
-		self.Q_1_weight = weight_parameter([feature_size, det_dim])
-		self.Q_1_bias = bias_parameter([batch_size, det_dim])
+		self.q_fc_1 = nn.Linear(feature_size, det_dim)
 
-		self.Q_2_weight = weight_parameter([det_dim, det_dim])
-		self.Q_2_bias = bias_parameter([batch_size, det_dim])
+		self.q_fc_2 = nn.Linear(det_dim, det_dim)
 
-		self.Q_3_weight = weight_parameter([det_dim, stoc_dim])
-		self.Q_3_bias = bias_parameter([batch_size, stoc_dim])
+		self.q_fc_mean = nn.Linear(det_dim, stoc_dim)
 		
-		self.Q_4_weight = weight_parameter([det_dim, stoc_dim])
-		self.Q_4_bias = bias_parameter([batch_size, stoc_dim])
+		self.q_fc_logvar = nn.Linear(det_dim, stoc_dim)
 
-		self.P_1_weight = weight_parameter([stoc_dim, det_dim])
-		self.P_1_bias = bias_parameter([batch_size * K, det_dim])
+		self.p_fc_1 = nn.Linear(stoc_dim, det_dim)
 
-		self.P_2_weight = weight_parameter([det_dim, det_dim])
-		self.P_2_bias = bias_parameter([batch_size * K, det_dim])
+		self.p_fc_2 = nn.Linear(det_dim, det_dim)
 
-		self.P_3_weight = weight_parameter([det_dim, feature_size])
-		self.P_3_bias = bias_parameter([batch_size * K, feature_size])
+		self.p_fc_3 = nn.Linear(det_dim, feature_size)
 
 
 	def encode(self, x):
-		q_out_one = linear_then_tanh(x, self.Q_1_weight, self.Q_1_bias)
-		q_out_two = linear_then_tanh(q_out_one, self.Q_2_weight, self.Q_2_bias)
-		stoc_mean = linear(q_out_two, self.Q_3_weight, self.Q_3_bias)
-		stoc_logvar = linear(q_out_two, self.Q_4_weight, self.Q_4_bias)
+		q_out_one = F.tanh(self.q_fc_1(x))
+		q_out_two = F.tanh(self.q_fc_2(q_out_one))
+		stoc_mean = self.q_fc_mean(q_out_two)
+		stoc_logvar = self.q_fc_logvar(q_out_two)
 		return stoc_mean, stoc_logvar
 
-	def get_K_samples(self, stoc_mean, stoc_logvar, batch_size, K):
-		K_samples = torch.DoubleTensor([])
+	def get_K_samples(self, stoc_mean, stoc_logvar, K):
+		K_samples = torch.Tensor([])
 		stoc_var = torch.exp(stoc_logvar)
 		for i in range(K):
-			new_sample = sample_from_gaussian(stoc_mean, stoc_var, batch_size)
+			new_sample = sample_from_gaussian(stoc_mean, stoc_var)
 			K_samples = torch.cat((K_samples, new_sample), dim = 0)
-		return K_samples
+		return K_samples # （Batch_size * K）* stoc_dim
 		
 	def decode(self, K_samples):
-		p_out_one = linear_then_tanh(K_samples, self.P_1_weight, self.P_1_bias)
-		p_out_two = linear_then_tanh(p_out_one,  self.P_2_weight, self.P_2_bias)
-		X_hat = linear_then_sigmoid(p_out_two,  self.P_3_weight, self.P_3_bias)
+		p_out_one = F.tanh(self.p_fc_1(K_samples))
+		p_out_two = F.tanh(self.p_fc_2(p_out_one))
+		X_hat = F.sigmoid(self.p_fc_3(p_out_two))
+		return X_hat # (Batch_size * K) * stoc_dim
+
+	def forward(self, x, K):
+		stoc_mean, stoc_logvar = self.encode(x)
+		K_samples = self.get_K_samples(stoc_mean, stoc_logvar, K)
+		X_hat = self.decode(K_samples)
 		return X_hat
 
+	def generate_random_latent(self, stoc_dim):
+		mean = torch.zeros([1, stoc_dim])
+		var = torch.ones([1, stoc_dim])
+		latent = sample_from_gaussian(mean, var)
+		X_hat = self.decode(latent)
+		return X_hat
 
-def IWAE_loss(x, X_hat, K_samples, batch_size, K, stoc_mean, stoc_logvar,  feature_size, stoc_dim):
-	K_samples_tp = K_samples.reshape([K, batch_size, stoc_dim])
-	X_hat_tp = X_hat.reshape([K, batch_size, feature_size])
-	loss_per_batch = torch.ones(batch_size)
-	for i in range(batch_size):
-		h_i = K_samples_tp[:,i,:]
-		mean_i = repeat(stoc_mean[i,:].reshape([1,-1]), K, dim_ = 0)
-		var_i = torch.exp(repeat(stoc_logvar[i,:].reshape([1,-1]), K, dim_ = 0))
-		log_q_h_given_xi = torch.sum(- torch.log(var_i) - 0.5 * torch.pow((h_i - mean_i) / var_i, 2), dim = 1)
-		X_hat_i = X_hat_tp[:,i,:]
-		x_i = repeat(x[i,:].reshape([1,-1]), K, dim_ = 0)
-		log_p_x_given_hi = torch.mean(x_i * torch.log(X_hat_i + eps) + (1. - x_i) * torch.log(1. - X_hat_i + eps), dim = 1)
-		log_p_hi = torch.mean(-0.5 * (h_i **2), dim = 1)
-		log_tp = log_p_x_given_hi + log_p_hi - log_q_h_given_xi
-		loss_per_batch[i] = torch.log(torch.mean(torch.exp(log_tp)))
-	return torch.mean(loss_per_batch)
+	def IWAE_loss(self, x, X_hat, K_samples, batch_size, K, stoc_mean, stoc_logvar,  feature_size, stoc_dim):
+		x_tp = repeat(x, K)
+		K_samples_tp = K_samples.reshape([K, batch_size, stoc_dim])
+		X_hat_tp = X_hat.reshape([K, batch_size, feature_size])
+		mean_i = repeat(stoc_mean, K)
+		var_i = torch.exp(repeat(stoc_logvar, K))
+		log_q_h_given_xi = torch.sum(- torch.log(var_i) - 0.5 * torch.pow((K_samples_tp - mean_i) / var_i, 2), dim = 2)
+		log_p_x_given_hi = torch.sum(x_tp * torch.log(X_hat_tp + eps) + (1. - x_tp) * torch.log(1. - X_hat_tp + eps), dim = 2)
+		log_p_hi = torch.sum(-0.5 * (K_samples_tp **2), dim = 2)
+		log_weight = log_p_x_given_hi + log_p_hi - log_q_h_given_xi
+		weight_ = torch.softmax(log_weight, dim = 0)
+		weight_ = Variable(weight_.detach(),requires_grad = False)
+		ELBO = -torch.mean(torch.sum(weight_ * log_weight, dim = 1))
+		return ELBO
 
 
 
