@@ -83,7 +83,7 @@ class importance_vae(nn.Module):
 		log_weight = log_p_x_given_hi + log_p_hi - log_q_h_given_xi
 		weight_ = torch.softmax(log_weight, dim = 0)
 		weight_ = Variable(weight_.detach(),requires_grad = False).to(device)
-		ELBO = -torch.mean(torch.sum(weight_ * log_weight, dim = 1))
+		ELBO = -torch.mean(torch.sum(weight_ * log_weight, dim = 0))
 		return ELBO
 
 	def VAE_loss(self, x, X_hat, K_samples, batch_size, K, stoc_mean, stoc_logvar,  feature_size, stoc_dim):
@@ -96,7 +96,7 @@ class importance_vae(nn.Module):
 		log_p_x_given_hi = torch.sum(x_tp * torch.log(X_hat_tp + eps) + (1. - x_tp) * torch.log(1. - X_hat_tp + eps), dim = 2)
 		log_p_hi = torch.sum(-0.5 * (K_samples_tp **2), dim = 2)
 		log_weight = log_p_x_given_hi + log_p_hi - log_q_h_given_xi
-		ELBO = -torch.mean(torch.mean(log_weight, dim = 1))
+		ELBO = -torch.mean(torch.mean(log_weight, dim = 0))
 		return ELBO
 
 
