@@ -65,7 +65,7 @@ x_train, mu_true = generate_data(D, N)
 A_ = torch.eye(D) * 0.5
 b_ = torch.mean(x_train, dim = 0) * 0.5
 theta_ = torch.mean(x_train, dim = 0)
-grad_b = torch.zeros(loop, 5)
+grad_A = torch.zeros(loop, 5)
 grad_theta = torch.zeros(loop, 5)
 x_train_tensor = Variable(torch.Tensor(x_train))
 '''------------------------Construct model------------------------'''
@@ -78,20 +78,21 @@ for i in range(loop):
 	for j in range(len(K_all)):
 		Loss = model.get_loss(x_train_tensor, A, b, K_all[j], theta, flag)
 		Loss.backward()
-		grad_b[i, j] = b.grad[1]
+		grad_A[i, j] = A.grad[1,1]
 		grad_theta[i, j] = theta.grad[1]
 		A.grad.data.zero_()
 		b.grad.data.zero_()
 		theta.grad.data.zero_()
+	print(i)
 	
 plt.figure()
-plt.hist(grad_b[:,0], bins = 30, color='fuchsia',alpha = 0.4)
-plt.hist(grad_b[:,1], bins = 30, color='forestgreen',alpha = 0.4)
-plt.hist(grad_b[:,2], bins = 30, color='indigo',alpha = 0.4)
-plt.hist(grad_b[:,3], bins = 30, color='yellow',alpha = 0.4)
-plt.hist(grad_b[:,4], bins = 30, color='skyblue',alpha = 0.4)
-plt.xlabel('\nabla(b)')
-plt.ylabel('b-density')
+plt.hist(grad_A[:,0], bins = 30, color='fuchsia',alpha = 0.4)
+plt.hist(grad_A[:,1], bins = 30, color='forestgreen',alpha = 0.4)
+plt.hist(grad_A[:,2], bins = 30, color='indigo',alpha = 0.4)
+plt.hist(grad_A[:,3], bins = 30, color='yellow',alpha = 0.4)
+plt.hist(grad_A[:,4], bins = 30, color='skyblue',alpha = 0.4)
+plt.xlabel('$\nabla(b)$')
+plt.ylabel('$b$-density')
 plt.savefig('VAE gradient for inference network.jpg')
 plt.figure()
 plt.hist(grad_theta[:,0], bins = 30, color='fuchsia',alpha = 0.4)
@@ -99,7 +100,7 @@ plt.hist(grad_theta[:,1], bins = 30, color='forestgreen',alpha = 0.4)
 plt.hist(grad_theta[:,2], bins = 30, color='indigo',alpha = 0.4)
 plt.hist(grad_theta[:,3], bins = 30, color='yellow',alpha = 0.4)
 plt.hist(grad_theta[:,4], bins = 30, color='skyblue',alpha = 0.4)
-plt.xlabel('\nabla(\theta)')
-plt.ylabel('\theta-density')
+plt.xlabel('$\nabla(\theta)$')
+plt.ylabel('$\theta$-density')
 plt.savefig('VAE gradient for generative network.jpg')
 plt.show()
